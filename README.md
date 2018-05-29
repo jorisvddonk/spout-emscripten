@@ -34,3 +34,7 @@ Compiling
 ---------
 * `docker build . -t spoutcompiler`
 * `docker run -v $(pwd):/src spoutcompiler`
+
+Demo
+----
+http://mooses.nl/misc/spout/
