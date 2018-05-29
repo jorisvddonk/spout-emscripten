@@ -33,4 +33,4 @@ https://njw.me.uk/spout/
 Compiling
 ---------
 * `docker build . -t spoutcompiler`
-* `docker run -v $(pwd):/src spoutcompiler
+* `docker run -v $(pwd):/src spoutcompiler`
