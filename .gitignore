@@ -1,3 +1,6 @@
 *.o
 spout
-index.html
+*.html
+*.js
+config.h
+*.wasm
