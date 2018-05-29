@@ -1,5 +1,9 @@
 /* See COPYING file for copyright, license and warranty details */
 
+#ifdef EMSCRIPTEN // EMSCRIPTEN is defined by the emcc compiler frontend
+#include <emscripten.h>
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -102,6 +106,7 @@ void pceAppInit(void)
 
 	memset(vbuff, 0, 128 * 88);
 
+	#ifndef EMSCRIPTEN // Score is disabled in Emscripten compiled builds
 	snprintf(score_path, 512, "%s/%s", getenv("HOME"), ".spout.sco");
 
 	{
@@ -111,6 +116,7 @@ void pceAppInit(void)
 			close(fa);
 		}
 	}
+	#endif
 
 	srand(SDL_GetTicks());
 }
@@ -140,6 +146,7 @@ void pceAppProc(int cnt)
 
 	if(!(gamePhase & 1)) {
 		if(gamePhase == 0) {
+			#ifndef EMSCRIPTEN // Score is disabled in Emscripten compiled builds
 			if(score > hiScore[0] || (score == hiScore[0] && height > hiScore[1])) {
 				int fa;
 				hiScore[0] = score;
@@ -149,6 +156,7 @@ void pceAppProc(int cnt)
 					close(fa);
 				}
 			}
+			#endif
 		} else {
 			score = 0;
 			dispscore = 0;
@@ -841,9 +849,9 @@ void initSDL() {
 	atexit(SDL_Quit);
 
 	if(fullscreen)
-		video = SDL_SetVideoMode(SDL_WIDTH, SDL_HEIGHT, 8, SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_HWPALETTE | SDL_FULLSCREEN);
+		video = SDL_SetVideoMode(SDL_WIDTH, SDL_HEIGHT, 32, SDL_DOUBLEBUF | SDL_FULLSCREEN);
 	else
-		video = SDL_SetVideoMode(SDL_WIDTH, SDL_HEIGHT, 8, SDL_DOUBLEBUF | SDL_HWSURFACE | SDL_HWPALETTE);
+		video = SDL_SetVideoMode(SDL_WIDTH, SDL_HEIGHT, 32, SDL_DOUBLEBUF);
 	if(video == NULL) {
 		fprintf(stderr, "Couldn't set video mode: %s\n", SDL_GetError());
 		exit(1);
@@ -868,25 +876,47 @@ void initSDL() {
 			{85, 85, 85},
 			{0, 0, 0}
 		};
+		#ifndef EMSCRIPTEN
 		SDL_SetColors(video, pltTbl, 0, 4);
 		SDL_SetColors(layer, pltTbl, 0, 4);
+		#endif
 	}
+	SDL_Flip(video);
+	printf("SDL Initalized\n");
 }
+
+void PutPixel32_nolock(SDL_Surface * surface, int x, int y, Uint32 color)
+{
+    Uint8 * pixel = (Uint8*)surface->pixels;
+    pixel += (y * surface->pitch) + (x * sizeof(Uint32));
+    *((Uint32*)pixel) = color;
+}
+
 
 void pceLCDTrans() {
 	int x, y;
-	unsigned char *vbi, *bi;
-
-	bi = layer->pixels;
+	int a, color;
+	if (SDL_MUSTLOCK(video)) SDL_LockSurface(video);
 	for(y = 0; y < SDL_HEIGHT; y ++) {
-		vbi = vBuffer + (y / zoom) * 128;
 		for(x = 0; x < SDL_WIDTH; x ++) {
-			*bi ++ = *(vbi + x / zoom);
+    		a = *((vBuffer + (y / zoom) * 128) + (x / zoom));
+	    	if (a == 0) {
+	    		color = 0xFFFFFFFF;
+	    	}
+    		else if (a == 1) {
+    			color = 0xFFAAAAAA;
+    		}
+    		else if (a == 2) {
+    			color = 0xFF555555;
+    		}
+    		else if (a == 3) {
+    			color = 0xFF000000;
+    		}
+    		PutPixel32_nolock(video, x, y, color);
 		}
-		bi += layer->pitch - SDL_WIDTH;
 	}
+	if (SDL_MUSTLOCK(video)) SDL_UnlockSurface(video);
 
-	SDL_BlitSurface(layer, NULL, video, &layerRect);
 	SDL_Flip(video);
 }
 
@@ -997,52 +1027,59 @@ int pceFontPrintf(const char *fmt, ...)
 	return 0;
 }
 
+
+int cnt = 0; 
+long nextTick;
+
+void one_iter() {
+	// process input
+	// render to screen
+	long wait;
+	SDL_Event event;
+
+	SDL_PollEvent(&event);
+	#ifdef EMSCRIPTEN
+	keys = SDL_GetKeyboardState(NULL);
+	#else
+	keys = SDL_GetKeyState(NULL);
+	#endif
+
+	wait = nextTick - SDL_GetTicks();
+	if(wait > 0) {
+		#ifdef EMSCRIPTEN
+		#else
+			SDL_Delay(wait);
+		#endif
+	}
+
+	pceAppProc(cnt);
+
+	nextTick += interval;
+	cnt ++;
+
+	if((keys[SDLK_ESCAPE] == SDL_PRESSED && (keys[SDLK_LSHIFT] == SDL_PRESSED || keys[SDLK_RSHIFT] == SDL_PRESSED)) || event.type == SDL_QUIT) {
+		exec = 0;
+	}
+}
+
 int main(int argc, char *argv[])
 {
-	SDL_Event event;
-	long nextTick, wait;
-	int cnt = 0;
+	printf("Starting spout v1.4 - Emscripten Edition\n");
+	long wait;
 	int i;
-	for(i = 1; i < argc; i++) {
-		switch(argv[i][1]) {
-			case 'f':
-				fullscreen = 1;
-				break;
-			case 'z':
-				if(++i < argc)
-					zoom = strtol(argv[i], NULL, 0);
-				break;
-			default:
-				fprintf(stderr, "Usage: %s [-f] [-z zoomlevel]\n", argv[0]);
-				exit(EXIT_FAILURE);
-		}
-	}
 
 	initSDL();
 	pceAppInit();
 
-	SDL_WM_SetCaption("spout", NULL);
-
 	nextTick = SDL_GetTicks() + interval;
-	while(exec) {
-		SDL_PollEvent(&event);
-		keys = SDL_GetKeyState(NULL);
 
-		wait = nextTick - SDL_GetTicks();
-		if(wait > 0) {
-			SDL_Delay(wait);
+	#ifdef EMSCRIPTEN
+		emscripten_set_main_loop(one_iter, FRAMERATE, 1);
+	#else
+		while(exec) {
+			one_iter();
 		}
-
-		pceAppProc(cnt);
-	//	SDL_Flip(video);
-
-		nextTick += interval;
-		cnt ++;
-
-		if((keys[SDLK_ESCAPE] == SDL_PRESSED && (keys[SDLK_LSHIFT] == SDL_PRESSED || keys[SDLK_RSHIFT] == SDL_PRESSED)) || event.type == SDL_QUIT) {
-			exec = 0;
-		}
-	}
+	#endif
 
 	return 0;
 }
